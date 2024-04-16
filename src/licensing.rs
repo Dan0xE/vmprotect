@@ -166,17 +166,17 @@ impl From<VMProtectSerialNumberData> for SerialNumberData {
 
 #[derive(Debug)]
 pub struct SerialNumberData {
-    state: SerialState,
+    pub state: SerialState,
     /// User name
-    user_name: String,
+    pub user_name: String,
     /// Email
-    email: String,
+    pub email: String,
     /// Date of serial number expiration
-    expire: Option<Date<Utc>>,
+    pub expire: Option<Date<Utc>>,
     /// Max date of build, that will accept this key
-    max_build: Option<Date<Utc>>,
-    running_time: Duration,
-    user_data: Vec<u8>,
+    pub max_build: Option<Date<Utc>>,
+    pub running_time: Duration,
+    pub user_data: Vec<u8>,
 }
 impl SerialNumberData {
     #[inline(always)]
