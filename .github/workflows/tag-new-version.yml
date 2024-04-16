@@ -1,0 +1,22 @@
+name: "ci: tag new version"
+
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+    - "Cargo.toml"
+    tags-ignore:
+      - '*'
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: butlerlogic/action-autotag@1.1.2
+        with:
+          root: "Cargo.toml"
+          regex_pattern: "version\\s*=\\s*\"([0-9\\.]+)\""
+        env:
+          GITHUB_TOKEN: "${{ secrets.BUILD_ACTION }}"
