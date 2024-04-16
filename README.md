@@ -1,5 +1,3 @@
-# vmprotect ![crates.io](https://img.shields.io/crates/v/vmprotect.svg)
-
 WIP VMProtect SDK for rust
 
 ## Basic VMProtect features
