@@ -14,7 +14,7 @@ fn main() {
     } else if target.starts_with("i686-") {
         println!("cargo:rustc-link-lib=dylib=VMProtectSDK32")
     } else if target.starts_with("aarch64-apple-darwin") {
-        println!("cargo:rustc-link-lib=dylib=libVMProtectSDK");
+        println!("cargo:rustc-link-lib=dylib=VMProtectSDK");
     } else {
         panic!("Unsupported target: {}", target)
     }
