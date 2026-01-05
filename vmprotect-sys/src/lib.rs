@@ -10,7 +10,7 @@ use std::os::raw::{c_char, c_void};
     link(name = "VMProtectSDK")
 )]
 #[cfg_attr(target_pointer_width = "32", link(name = "VMProtectSDK32"))]
-extern "system" {
+unsafe extern "system" {
     // Markers
     pub fn VMProtectBegin(name: *const c_char);
     pub fn VMProtectBeginVirtualization(name: *const c_char);
@@ -33,9 +33,6 @@ extern "system" {
     pub fn VMProtectGetSerialNumberState() -> u32;
     pub fn VMProtectGetSerialNumberData(data: *mut VMProtectSerialNumberData, size: u32) -> u8;
     pub fn VMProtectGetCurrentHWID(hwid: *mut c_char, size: u32) -> u32;
-    // Activation
-    pub fn VMProtectActivateLicense(code: *const c_char, serial: *mut c_char, size: u32) -> u32;
-    pub fn VMProtectDeactivateLicense(serial: *const c_char) -> u32;
     pub fn VMProtectGetOfflineActivationString(
         code: *const c_char,
         buf: *const c_char,
@@ -46,6 +43,9 @@ extern "system" {
         buf: *const c_char,
         size: u32,
     ) -> u32;
+    // Activation
+    pub fn VMProtectActivateLicense(code: *const c_char, serial: *mut c_char, size: u32) -> u32;
+    pub fn VMProtectDeactivateLicense(serial: *const c_char) -> u32;
 }
 
 #[derive(Default, Clone, Copy)]

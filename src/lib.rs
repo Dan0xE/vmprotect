@@ -1,5 +1,3 @@
-use std::arch::asm;
-
 #[doc(hidden)]
 pub use real_c_string::real_c_string as marker_name;
 pub use vmprotect_macros::protected as protect;
@@ -15,21 +13,13 @@ pub mod service;
 #[cfg(feature = "strings")]
 pub mod strings;
 
-#[inline(always)]
+#[inline(never)]
 #[doc(hidden)]
-pub fn blackbox() {
-    unsafe {
-        asm!("nop");
-    }
-}
-
-#[inline(always)]
+pub fn blackbox() {}
+#[inline(never)]
 #[doc(hidden)]
-pub fn blackbox_value<T>(value: &mut T) {
-    let ptr = value as *mut _;
-    unsafe {
-        asm!("nop {}", in(reg) ptr);
-    }
+pub fn blackbox_value<T>(_value: &mut T) {
+    std::hint::black_box(_value);
 }
 
 #[macro_export]
@@ -66,7 +56,7 @@ macro_rules! protected {
         $crate::markers::end();
         ret
     }};
-    (ultra, lock $x: literal; $code: expr) => {{
+    (ultra, lock($x: literal), $code: expr) => {{
         $crate::markers::begin_ultra_lock_by_key($crate::marker_name!($x));
         $crate::blackbox();
         let mut ret = $code;
@@ -75,18 +65,11 @@ macro_rules! protected {
         ret
     }};
 
-    (cstr $x: literal) => {{
-        unsafe {$crate::strings::encrypted_a::EncryptedStringA::new(
-            $crate::marker_name!($x),
-            $x.len(),
-        )}
-    }};
+    (cstr $x: literal) => {
+        // Safety: interior nuls are checked by `real_c_string` crate
+        unsafe { $crate::strings::encrypted_a::EncryptedStringA::new($crate::marker_name!($x)) }
+    };
     (cwstr $x: literal) => {{
-        unsafe {$crate::strings::encrypted_w::EncryptedStringW::new(
-            $crate::marker_name!($x),
-        )}
+        unsafe { $crate::strings::encrypted_w::EncryptedStringW::new($crate::marker_name!($x)) }
     }};
-    (str $x: literal) => {{
-        &$crate::protected!(cstr $x) as &str
-    }}
 }

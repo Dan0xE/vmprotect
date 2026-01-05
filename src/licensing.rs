@@ -1,7 +1,6 @@
 use bitflags::bitflags;
-use chrono::{offset::TimeZone, Date, Utc};
-use std::ffi::NulError;
-use std::ffi::{CStr, CString};
+use chrono::NaiveDate;
+use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::ptr::null_mut;
 use std::time::Duration;
@@ -10,6 +9,8 @@ use vmprotect_sys::{
     VMProtectGetSerialNumberData, VMProtectGetSerialNumberState, VMProtectSerialNumberData,
     VMProtectSetSerialNumber,
 };
+use widestring::U16CString;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Gets hwid to display to user
 ///
@@ -25,18 +26,87 @@ pub fn get_hwid() -> String {
     unsafe { String::from_utf8_unchecked(buf) }
 }
 
+const MAX_SERIAL_NUMBER_SIZE: usize = 4096 / 8 * 3 / 2 + 64;
+
+/// Has no internal allocation, making it safer to keep
+/// it on stack, when we want user to always use activation api.
+#[derive(Zeroize, ZeroizeOnDrop, Clone)]
+pub struct SerialNumber([i8; MAX_SERIAL_NUMBER_SIZE]);
+impl SerialNumber {
+    #[inline(never)]
+    pub fn export_to_string(&self) -> String {
+        let len = self
+            .0
+            .iter()
+            .position(|v| *v == 0)
+            // Should be unreachable
+            .unwrap_or(0);
+        // FIXME: Might be unsound, assert that string is utf-8 during construction
+        unsafe{str::from_utf8_unchecked(
+            &std::mem::transmute::<&[i8; MAX_SERIAL_NUMBER_SIZE], &[u8; MAX_SERIAL_NUMBER_SIZE]>(
+                &self.0,
+            )[0..len]
+        )}
+        .to_string()
+    }
+    #[inline(always)]
+    pub fn protected_import(protected: Vec<u8>, one_time_pad: impl Iterator<Item = u8>) -> Self {
+        let mut out = [0u8; MAX_SERIAL_NUMBER_SIZE];
+        // Last byte is reserved for \0
+        if protected.len() < MAX_SERIAL_NUMBER_SIZE {
+            // Letting it fail on vmprotect side otherwise
+            for (i, b) in protected
+                .iter()
+                .copied()
+                .zip(one_time_pad)
+                .map(|(v, b)| v ^ b)
+                .enumerate()
+            {
+                out[i] = b;
+            }
+        }
+        // Safety: transmute between i8 and u8
+        SerialNumber(unsafe {
+            std::mem::transmute::<[u8; MAX_SERIAL_NUMBER_SIZE], [i8; MAX_SERIAL_NUMBER_SIZE]>(out)
+        })
+    }
+    #[inline(always)]
+    pub fn protected_export(self, one_time_pad: impl Iterator<Item = u8>) -> Vec<u8> {
+        self.0
+            .iter()
+            .copied()
+            .take_while(|v| *v != 0)
+            .zip(one_time_pad)
+            .map(|(v, b)| v as u8 ^ b)
+            .collect()
+    }
+}
+impl From<String> for SerialNumber {
+    #[inline(always)]
+    fn from(value: String) -> Self {
+        let mut out = [0u8; MAX_SERIAL_NUMBER_SIZE];
+        // Last byte is reserved for \0
+        if value.len() < MAX_SERIAL_NUMBER_SIZE {
+            // Letting it fail on vmprotect side otherwise
+            out[0..value.len()].copy_from_slice(value.as_bytes());
+        }
+        // Safety: transmute between i8 and u8
+        SerialNumber(unsafe {
+            std::mem::transmute::<[u8; MAX_SERIAL_NUMBER_SIZE], [i8; MAX_SERIAL_NUMBER_SIZE]>(out)
+        })
+    }
+}
+
 /// Feeds license system with serial number
 #[inline(always)]
-pub fn set_serial_number(serial: impl Into<Vec<u8>>) -> Result<SerialState, NulError> {
-    let serial = CString::new(serial)?;
-    Ok(SerialState::new(unsafe {
-        VMProtectSetSerialNumber(serial.as_ptr())
-    }))
+pub fn set_serial_number(serial: &SerialNumber) -> SerialState {
+    SerialState::new(unsafe { VMProtectSetSerialNumber(serial.0.as_ptr()) })
+        .unwrap_or(SerialState::CORRUPTED)
 }
 
 #[inline(always)]
 pub fn get_serial_number_state() -> SerialState {
-    SerialState::new(unsafe { VMProtectGetSerialNumberState() })
+    SerialState::new(unsafe { VMProtectGetSerialNumberState() }).unwrap_or(SerialState::CORRUPTED)
 }
 
 #[inline(always)]
@@ -48,38 +118,35 @@ pub fn get_serial_number_data() -> Option<SerialNumberData> {
             std::mem::size_of::<VMProtectSerialNumberData>() as u32,
         )
     };
-    if out == 1 {
-        Some(data.into())
-    } else {
-        None
-    }
+    if out == 1 { Some(data.into()) } else { None }
 }
 
 #[inline(always)]
-pub fn activate_license(code: impl Into<Vec<u8>>) -> Result<String, ActivationStatus> {
-    let code = CString::new(code).map_err(|_| ActivationStatus::NulError)?;
+#[cfg(feature = "activation")]
+pub fn activate_license(code: &CStr) -> Result<SerialNumber, ActivationStatus> {
+    let mut license = SerialNumber([0; MAX_SERIAL_NUMBER_SIZE]);
     // Max possible, from vmprotect examples
-    let mut out = Vec::with_capacity(4096 / 8 * 3 / 2 + 64);
-    let res =
-        unsafe { VMProtectActivateLicense(code.as_ptr(), out.as_mut_ptr(), out.capacity() as u32) };
+    let res = unsafe {
+        VMProtectActivateLicense(
+            code.as_ptr(),
+            license.0.as_mut_ptr(),
+            MAX_SERIAL_NUMBER_SIZE as u32,
+        )
+    };
     let res = ActivationStatus::from(res);
     if res == ActivationStatus::Ok {
         // Vec buffer is passed to CString
-        Ok(unsafe { CStr::from_ptr(out.as_ptr()) }
-            .to_str()
-            .to_owned()
-            .unwrap()
-            .to_string())
+        Ok(license)
     } else {
         Err(res)
     }
 }
 
 #[inline(always)]
-pub fn deactivate_license(serial: impl Into<Vec<u8>>) -> Result<(), ActivationStatus> {
-    let serial = CString::new(serial).map_err(|_| ActivationStatus::NulError)?;
+#[cfg(feature = "activation")]
+pub fn deactivate_license(serial: SerialNumber) -> Result<(), ActivationStatus> {
     // Max possible
-    let res = unsafe { VMProtectDeactivateLicense(serial.as_ptr()) };
+    let res = unsafe { VMProtectDeactivateLicense(serial.0.as_ptr()) };
     let res = ActivationStatus::from(res);
     if res == ActivationStatus::Ok {
         Ok(())
@@ -89,6 +156,7 @@ pub fn deactivate_license(serial: impl Into<Vec<u8>>) -> Result<(), ActivationSt
 }
 
 bitflags! {
+    #[derive(Clone, Copy, Debug)]
     pub struct SerialState: u32 {
         const CORRUPTED = 0x00000001;
         const INVALID = 0x00000002;
@@ -100,8 +168,8 @@ bitflags! {
     }
 }
 impl SerialState {
-    pub fn new(value: u32) -> Self {
-        SerialState { bits: value }
+    pub fn new(value: u32) -> Option<Self> {
+        SerialState::from_bits(value)
     }
     #[inline(always)]
     pub fn is_success(&self) -> bool {
@@ -133,11 +201,15 @@ impl SerialState {
     }
 }
 
-fn convert_date(date: &VMProtectDate) -> Option<Date<Utc>> {
+fn convert_date(date: &VMProtectDate) -> Option<NaiveDate> {
     if date.w_year == 0 && date.b_month == 0 && date.b_day == 0 {
         return None;
     }
-    Some(Utc.ymd(date.w_year as i32, date.b_month as u32, date.b_day as u32))
+    // In case of broken date - assume it is invalid, and return known date in the past (1970-1-1)
+    Some(
+        NaiveDate::from_ymd_opt(date.w_year as i32, date.b_month as u32, date.b_day as u32)
+            .unwrap_or_default(),
+    )
 }
 
 impl From<VMProtectSerialNumberData> for SerialNumberData {
@@ -145,15 +217,13 @@ impl From<VMProtectSerialNumberData> for SerialNumberData {
     #[allow(unused_unsafe)]
     fn from(data: VMProtectSerialNumberData) -> Self {
         Self {
-            state: SerialState::new(data.state),
-            user_name: widestring::U16CString::from_vec_with_nul(
-                unsafe { data.user_name }.to_vec(),
-            )
-            .unwrap()
+            state: SerialState::new(data.state).unwrap_or(SerialState::CORRUPTED),
+            user_name: unsafe {
+                U16CString::from_ptr_truncate((&raw const data.user_name).cast(), 256)
+            }
             .to_string()
             .unwrap(),
-            email: widestring::U16CString::from_vec_with_nul(unsafe { data.email }.to_vec())
-                .unwrap()
+            email: unsafe { U16CString::from_ptr_truncate((&raw const data.email).cast(), 256) }
                 .to_string()
                 .unwrap(),
             expire: convert_date(&data.expire),
@@ -172,12 +242,13 @@ pub struct SerialNumberData {
     /// Email
     pub email: String,
     /// Date of serial number expiration
-    pub expire: Option<Date<Utc>>,
+    pub expire: Option<NaiveDate>,
     /// Max date of build, that will accept this key
-    pub max_build: Option<Date<Utc>>,
+    pub max_build: Option<NaiveDate>,
     pub running_time: Duration,
     pub user_data: Vec<u8>,
 }
+
 impl SerialNumberData {
     #[inline(always)]
     pub fn state(&self) -> SerialState {
@@ -192,11 +263,11 @@ impl SerialNumberData {
         &self.email
     }
     #[inline(always)]
-    pub fn expire(&self) -> Option<Date<Utc>> {
+    pub fn expire(&self) -> Option<NaiveDate> {
         self.expire
     }
     #[inline(always)]
-    pub fn max_build(&self) -> Option<Date<Utc>> {
+    pub fn max_build(&self) -> Option<NaiveDate> {
         self.max_build
     }
     #[inline(always)]
@@ -210,21 +281,20 @@ impl SerialNumberData {
 }
 
 #[derive(Debug, PartialEq)]
+#[repr(u8)]
 pub enum ActivationStatus {
-    Ok,
+    Ok = 0,
     /// Handled by api automatically
-    SmallBuffer,
-    NoConnection,
-    BadReply,
-    Banned,
-    Corrupted,
-    BadCode,
-    AlreadyUsed,
-    SerialUnknown,
-    Expired,
-    NotAvailable,
-    /// Not part of official api
-    NulError,
+    SmallBuffer = 1,
+    NoConnection = 2,
+    BadReply = 3,
+    Banned = 4,
+    Corrupted = 5,
+    BadCode = 6,
+    AlreadyUsed = 7,
+    SerialUnknown = 8,
+    Expired = 9,
+    NotAvailable = 10,
 }
 impl ActivationStatus {
     fn from(id: u32) -> Self {
