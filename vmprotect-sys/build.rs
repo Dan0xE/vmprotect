@@ -7,7 +7,7 @@ fn main() {
         Path::new(&dir).join("lib").display()
     );
     let target = env::var("TARGET").unwrap();
-    if target == "x86_64-apple-darwin" {
+    if target.ends_with("-apple-darwin") {
         println!("cargo:rustc-link-lib=dylib=VMProtectSDK");
     } else if target.starts_with("x86_64-") {
         println!("cargo:rustc-link-lib=dylib=VMProtectSDK64");
