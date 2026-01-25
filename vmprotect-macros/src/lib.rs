@@ -6,8 +6,8 @@ use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned as _;
 use syn::visit_mut::VisitMut;
 use syn::{
-    braced, parse_macro_input, Attribute, FnArg, LitCStr, LitStr, Pat, PatIdent, Path, Signature,
-    Token, Visibility,
+    Attribute, FnArg, LitCStr, LitStr, Pat, PatIdent, Path, Signature, Token, Visibility, braced,
+    parse_macro_input,
 };
 use twox_hash::XxHash3_64;
 

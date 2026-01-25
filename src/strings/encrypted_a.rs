@@ -18,7 +18,10 @@ impl EncryptedStringA<'_> {
     #[inline(always)]
     #[doc(hidden)]
     pub unsafe fn new(str: *const c_char) -> Self {
-        Self(unsafe { CStr::from_ptr(VMProtectDecryptStringA(str)) }, PhantomData)
+        Self(
+            unsafe { CStr::from_ptr(VMProtectDecryptStringA(str)) },
+            PhantomData,
+        )
     }
 }
 impl<'t> Drop for EncryptedStringA<'t> {
